@@ -87,7 +87,14 @@ def test_format_number():
     assert len(formatted) == logger._default_cell_size
     assert formatted == "1.234e+13"
 
-    # Test negative scientific notation truncation
+    sci_float = 1.11111111e-5
+    formatted = logger._format_number(sci_float)
+    assert formatted == "1.111e-05"
+
+    sci_float_neg = -1.11111111e-5
+    formatted = logger._format_number(sci_float_neg)
+    assert formatted == "-1.11e-05"
+
     sci_float = -12345678901234.5678901234
     formatted = logger._format_number(sci_float)
     assert len(formatted) == logger._default_cell_size
@@ -157,7 +164,7 @@ def test_step():
     # Test with custom color
     custom_color = Fore.RED
     step_str_colored = logger._print_step(
-        optimizer._space.keys, optimizer._space.res()[-1], optimizer._space.params_config, colour=custom_color
+        optimizer._space.keys, optimizer._space.res()[-1], optimizer._space.params_config, color=custom_color
     )
     assert custom_color in step_str_colored
 

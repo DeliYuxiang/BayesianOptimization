@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.optimize import NonlinearConstraint
 
-from bayes_opt.constraint import ConstraintModel
 from bayes_opt.exception import NotUniqueError
 from bayes_opt.target_space import TargetSpace
 
@@ -99,7 +99,7 @@ def test_register():
 
 
 def test_register_with_constraint():
-    constraint = ConstraintModel(lambda x: x, -2, 2, transform=lambda x: x)
+    constraint = NonlinearConstraint(lambda x: x, -2, 2)
     space = TargetSpace(target_func, PBOUNDS, constraint=constraint)
 
     assert len(space) == 0
@@ -125,7 +125,7 @@ def test_register_point_beyond_bounds():
     PBOUNDS = {"p1": (0, 1), "p2": (1, 10)}
     space = TargetSpace(target_func, PBOUNDS)
 
-    with pytest.warns(UserWarning):
+    with pytest.warns(UserWarning, match="is outside the bounds of the parameter"):
         space.register(params={"p1": 0.5, "p2": 20}, target=2.5)
 
 
@@ -194,7 +194,7 @@ def test_y_max():
 
 def test_y_max_with_constraint():
     PBOUNDS = {"p1": (0, 10), "p2": (1, 100)}
-    constraint = ConstraintModel(lambda p1, p2: p1 - p2, -2, 2)
+    constraint = NonlinearConstraint(lambda p1, p2: p1 - p2, -2, 2)
     space = TargetSpace(target_func, PBOUNDS, constraint)
     assert space._target_max() is None
     space.probe(params={"p1": 1, "p2": 2})  # Feasible
@@ -209,7 +209,7 @@ def test_y_max_within_pbounds():
     assert space._target_max() is None
     space.probe(params={"p1": 1, "p2": 2})
     space.probe(params={"p1": 0, "p2": 1})
-    with pytest.warns(UserWarning):
+    with pytest.warns(UserWarning, match="is outside the bounds of the parameter"):
         space.probe(params={"p1": 5, "p2": 1})
     assert space._target_max() == 3
 
@@ -228,7 +228,7 @@ def test_max():
 
 def test_max_with_constraint():
     PBOUNDS = {"p1": (0, 10), "p2": (1, 100)}
-    constraint = ConstraintModel(lambda p1, p2: p1 - p2, -2, 2)
+    constraint = NonlinearConstraint(lambda p1, p2: p1 - p2, -2, 2)
     space = TargetSpace(target_func, PBOUNDS, constraint=constraint)
 
     assert space.max() is None
@@ -241,7 +241,7 @@ def test_max_with_constraint():
 
 def test_max_with_constraint_identical_target_value():
     PBOUNDS = {"p1": (0, 10), "p2": (1, 100)}
-    constraint = ConstraintModel(lambda p1, p2: p1 - p2, -2, 2)
+    constraint = NonlinearConstraint(lambda p1, p2: p1 - p2, -2, 2)
     space = TargetSpace(target_func, PBOUNDS, constraint=constraint)
 
     assert space.max() is None
@@ -251,6 +251,26 @@ def test_max_with_constraint_identical_target_value():
     space.probe(params={"p1": 2, "p2": 3})  # Feasible, target value is also 5
     space.probe(params={"p1": 1, "p2": 6})  # Unfeasible
     assert space.max() == {"params": {"p1": 2, "p2": 3}, "target": 5, "constraint": -1}
+
+
+def test_max_categorical() -> None:
+    PBOUNDS = {
+        "first_float": (0.0, 1.0),
+        "categorical_value": ("a", "b", "c", "d"),
+        "second_float": (0.0, 1.0),
+    }
+
+    def _f(first_float: float, categorical_value: str, second_float: float) -> float:
+        return second_float if categorical_value == "c" else first_float
+
+    space = TargetSpace(_f, PBOUNDS)
+    space.probe(params={"first_float": 0.1, "categorical_value": "a", "second_float": 0.1})
+    space.probe(params={"first_float": 0.1, "categorical_value": "b", "second_float": 0.9})
+    space.probe(params={"first_float": 0.1, "categorical_value": "c", "second_float": 0.8})
+    space.probe(params={"first_float": 0.1, "categorical_value": "d", "second_float": 0.9})
+
+    expected = {"first_float": 0.1, "categorical_value": "c", "second_float": 0.8}
+    assert space.max()["params"] == expected
 
 
 def test_res():
@@ -268,6 +288,54 @@ def test_res():
         {"params": {"p1": 5, "p2": 4}, "target": 9},
         {"params": {"p1": 2, "p2": 3}, "target": 5},
         {"params": {"p1": 1, "p2": 6}, "target": 7},
+    ]
+    assert len(space.res()) == 4
+    assert space.res() == expected_res
+
+
+def test_res_categorical() -> None:
+    PBOUNDS = {"p1": (0, 10), "p2": ["a", "b", "c"]}
+
+    def _f(p1: float, p2: str) -> float:
+        return p1 + len(p2)
+
+    space = TargetSpace(_f, PBOUNDS)
+
+    assert space.res() == []
+    space.probe(params={"p1": 1, "p2": "a"})
+    space.probe(params={"p1": 5, "p2": "b"})
+    space.probe(params={"p1": 2, "p2": "c"})
+    space.probe(params={"p1": 2, "p2": "a"})
+
+    expected_res = [
+        {"params": {"p1": 1, "p2": "a"}, "target": 2},
+        {"params": {"p1": 5, "p2": "b"}, "target": 6},
+        {"params": {"p1": 2, "p2": "c"}, "target": 3},
+        {"params": {"p1": 2, "p2": "a"}, "target": 3},
+    ]
+    assert len(space.res()) == 4
+    assert space.res() == expected_res
+
+
+def test_res_categorical_with_constraints() -> None:
+    PBOUNDS = {"p1": (0, 10), "p2": ["a", "b", "c"]}
+
+    def _f(p1: float, p2: str) -> float:
+        return p1 + len(p2)
+
+    space = TargetSpace(_f, PBOUNDS, constraint=NonlinearConstraint(lambda p1, p2: p1 - 2, 0, 5))
+
+    assert space.res() == []
+    space.probe(params={"p1": 1, "p2": "a"})
+    space.probe(params={"p1": 5, "p2": "b"})
+    space.probe(params={"p1": 2, "p2": "c"})
+    space.probe(params={"p1": 2, "p2": "a"})
+
+    expected_res = [
+        {"params": {"p1": 1, "p2": "a"}, "target": 2, "allowed": False, "constraint": -1},
+        {"params": {"p1": 5, "p2": "b"}, "target": 6, "allowed": True, "constraint": 3},
+        {"params": {"p1": 2, "p2": "c"}, "target": 3, "allowed": True, "constraint": 0},
+        {"params": {"p1": 2, "p2": "a"}, "target": 3, "allowed": True, "constraint": 0},
     ]
     assert len(space.res()) == 4
     assert space.res() == expected_res
